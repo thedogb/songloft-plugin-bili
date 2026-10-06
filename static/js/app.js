@@ -855,6 +855,38 @@
     select.value = selectedId ? String(selectedId) : '0';
   }
 
+  async function loadWatchPlaylists(selectedId, selectedTitle) {
+    const select = $('set-watch-playlist');
+    let playlists = [];
+    try {
+      const response = await API.apiGet('/api/playlists');
+      playlists = Array.isArray(response.playlists) ? response.playlists : [];
+    } catch (e) {
+      /* Keep the configured playlist available if the host API is temporarily unavailable. */
+    }
+    select.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = '0';
+    none.textContent = '不加入歌单';
+    none.dataset.title = '';
+    select.appendChild(none);
+    playlists.forEach((playlist) => {
+      const option = document.createElement('option');
+      option.value = String(playlist.id);
+      option.textContent = (playlist.name || '未命名歌单') + '（' + (playlist.song_count || 0) + ' 首）';
+      option.dataset.title = playlist.name || '';
+      select.appendChild(option);
+    });
+    if (selectedId && !playlists.some((playlist) => Number(playlist.id) === Number(selectedId))) {
+      const option = document.createElement('option');
+      option.value = String(selectedId);
+      option.textContent = (selectedTitle || '已配置歌单') + '（已不存在）';
+      option.dataset.title = selectedTitle || '';
+      select.appendChild(option);
+    }
+    select.value = selectedId ? String(selectedId) : '0';
+  }
+
   async function loadSettings() {
     let s;
     try {
@@ -863,6 +895,7 @@
       return;
     }
     await loadWatchFoldersForSettings(s.watch_favorite_id, s.watch_favorite_title);
+    await loadWatchPlaylists(s.watch_playlist_id, s.watch_playlist_title);
     $('set-quality').value = s.audio_quality || 'high';
     $('set-dolby').checked = !!s.enable_dolby;
     $('set-hires').checked = !!s.enable_hires;
@@ -905,6 +938,8 @@
         watch_favorite_id: parseInt($('set-watch-folder').value, 10) || 0,
         watch_favorite_title: selectedFolder ? selectedFolder.dataset.title || '' : '',
         watch_interval_minutes: Math.min(1440, Math.max(1, parseInt($('set-watch-interval').value, 10) || 10)),
+        watch_playlist_id: parseInt($('set-watch-playlist').value, 10) || 0,
+        watch_playlist_title: $('set-watch-playlist').selectedOptions[0]?.dataset.title || '',
       };
       try {
         const response = await API.apiPost('/api/settings', body);
@@ -918,7 +953,7 @@
       }
     }, 500);
   }
-  ['set-quality', 'set-dolby', 'set-hires', 'set-template', 'set-embed', 'set-format', 'set-bitrate', 'set-interval', 'set-pause-on-error', 'set-watch-enabled', 'set-watch-folder', 'set-watch-interval'].forEach((id) => {
+  ['set-quality', 'set-dolby', 'set-hires', 'set-template', 'set-embed', 'set-format', 'set-bitrate', 'set-interval', 'set-pause-on-error', 'set-watch-enabled', 'set-watch-folder', 'set-watch-interval', 'set-watch-playlist'].forEach((id) => {
     $(id).addEventListener('change', saveSettings);
   });
   $('set-format').addEventListener('change', syncBitrateEnabled);
@@ -946,6 +981,7 @@
     box.textContent = [
       '监控：' + (status.enabled ? '已启用' : '已关闭'),
       '收藏夹：' + (status.folder_title || '-'),
+      '目标歌单：' + (status.playlist_id > 0 ? status.playlist_title || '-' : '不加入歌单'),
       '运行状态：' + (status.running ? '检查中' : '空闲'),
       '上次检查：' + localTime(status.last_check_at),
       '下次检查：' + localTime(status.next_check_at),

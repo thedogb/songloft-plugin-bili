@@ -25,6 +25,8 @@ export interface Settings {
   watch_favorite_id: number;
   watch_favorite_title: string;
   watch_interval_minutes: number;
+  watch_playlist_id: number;
+  watch_playlist_title: string;
 }
 
 const DEFAULTS: Settings = {
@@ -41,6 +43,8 @@ const DEFAULTS: Settings = {
   watch_favorite_id: 0,
   watch_favorite_title: '',
   watch_interval_minutes: 10,
+  watch_playlist_id: 0,
+  watch_playlist_title: '',
 };
 
 export async function getSettings(): Promise<Settings> {

@@ -2,7 +2,7 @@
 
 import { downloadSingleSong, getBatchTask } from './downloader';
 import { fetchFolderItems } from './favorites';
-import { importSongs } from './importer';
+import { addSongsToPlaylist, importSongs } from './importer';
 import { dedupKeyForVideo, ensureFirstPage, type BiliVideo } from './search';
 import { getSettings, type Settings } from './store';
 
@@ -156,6 +156,16 @@ async function processWatchItem(item: BiliVideo, state: FavoriteWatchState): Pro
     entry.song_id = songId;
     entry.updated_at = nowIso();
     await saveWatchState(state);
+
+    const settings = await getSettings();
+    if (settings.watch_playlist_id > 0) {
+      try {
+        await addSongsToPlaylist(settings.watch_playlist_id, [songId]);
+        log(`added to playlist playlist=${settings.watch_playlist_id} bvid=${entry.bvid} songId=${songId}`);
+      } catch (error) {
+        log(`playlist add failed playlist=${settings.watch_playlist_id} bvid=${entry.bvid} error=${safeError(error)}`);
+      }
+    }
 
     const { result } = await downloadSingleSong(songId);
     if (result?.status === 'failed') throw new Error(result.error || 'download returned failed');
@@ -321,7 +331,7 @@ export async function startFavoriteWatcher(): Promise<void> {
 
 export async function reconfigureFavoriteWatcher(previous: Settings, next: Settings): Promise<void> {
   if (!next.watch_favorite_enabled) {
-    stopFavoriteWatcher();
+    if (previous.watch_favorite_enabled) stopFavoriteWatcher();
     return;
   }
   const enabledNow = !previous.watch_favorite_enabled && next.watch_favorite_enabled;
@@ -360,6 +370,8 @@ export async function getFavoriteWatchStatus(): Promise<Record<string, unknown>>
     folder_id: settings.watch_favorite_id,
     folder_title: settings.watch_favorite_title || state?.folder_title || '',
     interval_minutes: settings.watch_interval_minutes,
+    playlist_id: settings.watch_playlist_id,
+    playlist_title: settings.watch_playlist_id > 0 ? settings.watch_playlist_title || '' : '',
     running: watchRunning,
     next_check_at: nextCheckAt,
     last_check_at: state?.last_check_at || '',
