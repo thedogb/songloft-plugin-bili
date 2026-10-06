@@ -21,6 +21,10 @@ export interface Settings {
   // 转码码率：0=默认最高质量；128/192/320=指定 CBR。transcode_format 为 '' 时忽略
   transcode_bitrate: 0 | 128 | 192 | 320;
   pause_on_error: boolean;
+  watch_favorite_enabled: boolean;
+  watch_favorite_id: number;
+  watch_favorite_title: string;
+  watch_interval_minutes: number;
 }
 
 const DEFAULTS: Settings = {
@@ -33,6 +37,10 @@ const DEFAULTS: Settings = {
   transcode_format: '',
   transcode_bitrate: 0,
   pause_on_error: true,
+  watch_favorite_enabled: false,
+  watch_favorite_id: 0,
+  watch_favorite_title: '',
+  watch_interval_minutes: 10,
 };
 
 export async function getSettings(): Promise<Settings> {
