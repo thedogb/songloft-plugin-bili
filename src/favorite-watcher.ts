@@ -3,7 +3,7 @@
 import { downloadSingleSong, getBatchTask } from './downloader';
 import { fetchFolderItems } from './favorites';
 import { importSongs } from './importer';
-import { dedupKeyForVideo, type BiliVideo } from './search';
+import { dedupKeyForVideo, ensureFirstPage, type BiliVideo } from './search';
 import { getSettings, type Settings } from './store';
 
 const WATCH_STATE_KEY = 'favorite_watch_state_v1';
@@ -146,7 +146,11 @@ async function processWatchItem(item: BiliVideo, state: FavoriteWatchState): Pro
   await saveWatchState(state);
 
   try {
-    const imported = await importSongs([item]);
+    const resolvedItem = await ensureFirstPage(item);
+    if (resolvedItem.cid) {
+      log(`resolved first page bvid=${resolvedItem.bvid} cid=${resolvedItem.cid} page=${resolvedItem.page || 1} duration=${resolvedItem.duration}`);
+    }
+    const imported = await importSongs([resolvedItem]);
     if (!imported.songs.length) throw new Error('import returned no song');
     const songId = imported.songs[0].id;
     entry.song_id = songId;
