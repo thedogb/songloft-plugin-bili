@@ -11,97 +11,161 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+
     permissions:
       contents: write
+
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: pnpm install
+        run: npm ci
 
-      - name: Resolve version
-        id: version
+      - name: Resolve version and package name
+        id: release_info
+        shell: bash
         run: |
+          set -euo pipefail
+
           if [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
             VERSION="$(date +'%Y.%-m.%-d')"
           fi
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Generated version: ${VERSION}"
 
-      - name: Update version in plugin.json / package.json
+          ENTRY_PATH="$(node -p "require('./plugin.json').entryPath")"
+          ZIP_NAME="${ENTRY_PATH}.jsplugin.zip"
+          TAG="v${VERSION}"
+          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ZIP_NAME}"
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "entry_path=${ENTRY_PATH}" >> "$GITHUB_OUTPUT"
+          echo "zip_name=${ZIP_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "download_url=${DOWNLOAD_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Update release metadata
+        shell: bash
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          node -e "
-            const fs = require('fs');
-            for (const f of ['plugin.json', 'package.json']) {
-              const p = JSON.parse(fs.readFileSync(f, 'utf-8'));
-              p.version = '${VERSION}';
-              fs.writeFileSync(f, JSON.stringify(p, null, 2) + '\n');
-            }
-          "
+          set -euo pipefail
+
+          VERSION="${{ steps.release_info.outputs.version }}"
+          DOWNLOAD_URL="${{ steps.release_info.outputs.download_url }}"
+
+          VERSION="$VERSION" DOWNLOAD_URL="$DOWNLOAD_URL" node <<'NODE'
+          const fs = require('fs');
+
+          const version = process.env.VERSION;
+          const downloadUrl = process.env.DOWNLOAD_URL;
+
+          const plugin = JSON.parse(fs.readFileSync('plugin.json', 'utf8'));
+          plugin.version = version;
+          plugin.download_url = downloadUrl;
+          fs.writeFileSync('plugin.json', JSON.stringify(plugin, null, 2) + '\n');
+
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = version;
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          NODE
+
+      - name: Validate
+        run: npm run validate
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Commit release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.release_info.outputs.version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add plugin.json package.json
+
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(release): bump to v${VERSION}"
+            git push origin HEAD:main
+          fi
+
+          echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Build
-        run: pnpm run build
+        run: npm run build
 
-      - name: Extract plugin info
-        id: plugin_info
+      - name: Verify package
+        shell: bash
         run: |
-          ENTRY_PATH=$(node -p "require('./plugin.json').entryPath")
-          ZIP_NAME="${ENTRY_PATH}.jsplugin.zip"
-          echo "entryPath=${ENTRY_PATH}" >> $GITHUB_OUTPUT
-          echo "zip_name=${ZIP_NAME}" >> $GITHUB_OUTPUT
+          set -euo pipefail
 
-      - name: Create GitHub Release
-        id: create_release
+          ZIP_NAME="${{ steps.release_info.outputs.zip_name }}"
+
+          test -f "dist/${ZIP_NAME}"
+          unzip -t "dist/${ZIP_NAME}"
+
+          sha256sum "dist/${ZIP_NAME}" | tee dist/SHA256SUMS
+
+      - name: Replace existing release if present
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          ZIP_NAME="${{ steps.plugin_info.outputs.zip_name }}"
-          TAG="v${VERSION}"
+          set -euo pipefail
 
-          if gh release view "${TAG}" &>/dev/null; then
+          TAG="${{ steps.release_info.outputs.tag }}"
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
             gh release delete "${TAG}" --yes --cleanup-tag
           fi
 
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.release_info.outputs.version }}"
+          TAG="${{ steps.release_info.outputs.tag }}"
+          ZIP_NAME="${{ steps.release_info.outputs.zip_name }}"
+
           gh release create "${TAG}" \
             "dist/${ZIP_NAME}" \
+            "dist/SHA256SUMS" \
+            --target "${release_sha}" \
             --title "v${VERSION}" \
             --notes "自动构建的 JS 插件 v${VERSION}"
 
-          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ZIP_NAME}"
-          echo "download_url=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-
-      - name: Commit version bump
+      - name: Verify release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          DOWNLOAD_URL="${{ steps.create_release.outputs.download_url }}"
-          node -e "
-            const fs = require('fs');
-            const p = JSON.parse(fs.readFileSync('plugin.json', 'utf-8'));
-            p.version = '${VERSION}';
-            p.download_url = '${DOWNLOAD_URL}';
-            fs.writeFileSync('plugin.json', JSON.stringify(p, null, 2) + '\n');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
-            pkg.version = '${VERSION}';
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add plugin.json package.json
-          git diff --staged --quiet || git commit -m "chore(release): bump to v${VERSION}"
-          git push
+          set -euo pipefail
+
+          TAG="${{ steps.release_info.outputs.tag }}"
+
+          TAG_SHA="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
+            --jq '.object.sha')"
+
+          echo "release_sha=${release_sha}"
+          echo "tag_sha=${TAG_SHA}"
+
+          test "${TAG_SHA}" = "${release_sha}"
+
+          gh release view "${TAG}"
